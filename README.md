@@ -1,3 +1,7 @@
+<<<<<<< HEAD
+=======
+# Emissionex-proj
+>>>>>>> 6267c0db2f1f4eda942fc04b305f80a6fb9562d3
 # EmissioNex — Anomaly Detection, Explainability, Localization & Evidence-Grounded Recommendations
 
 EmissioNex investigates unusual energy/CO₂e increases, localizes them in the facility hierarchy, explains which model features influenced expected energy, and produces advisory corrective-action recommendations supported by retrieved technical references.
