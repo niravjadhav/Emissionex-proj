@@ -1,0 +1,106 @@
+==============================================================================
+EmissioNex - Member 3: Anomaly Detection & Localization - evaluation report
+Generated: 2026-10-14 18:37:23
+==============================================================================
+
+1. DATA CHECKS
+  rows read: 44560   columns: 24   rows after cleaning: 44560
+  time range: 2026-01-01 23:45:00  ->  2026-01-30 23:45:00
+  hierarchy levels available: ['plant_id', 'building_id', 'department_id', 'machine_id']
+  missing optional columns: none
+  null counts (columns with nulls): {'fault_type': 44396}
+  dropped invalid timestamps: 0; exact duplicates: 0; duplicate (timestamp,machine): 0
+  negative energy set to NaN: 0; rows with missing target (not scored): 0
+
+  Target-leakage check on lag/rolling columns (vs per-machine rolling sum of kWh):
+    previous_hour_kwh  window=  4  match_incl_current=0.002  match_past_only=0.999  -> past_only
+    rolling_3h_kwh     window= 12  match_incl_current=0.996  match_past_only=0.001  -> includes_current_interval
+    rolling_6h_kwh     window= 24  match_incl_current=0.992  match_past_only=0.001  -> includes_current_interval
+    rolling_24h_kwh    window= 96  match_incl_current=0.966  match_past_only=0.001  -> includes_current_interval
+  Columns excluded from the baseline: {'rolling_3h_kwh': 'leakage check verdict = includes_current_interval', 'rolling_6h_kwh': 'leakage check verdict = includes_current_interval', 'rolling_24h_kwh': 'leakage check verdict = includes_current_interval'}
+  NOTE: the Member 2 notebook feeds rolling_3h/6h/24h_kwh to XGBoost. These columns are
+        rolling sums that INCLUDE the current interval's kWh (the prediction target), i.e.
+        target leakage. They are removed here; baseline R2 is therefore a leak-free figure.
+
+2. METHOD
+  Expected-emission baseline: XGBoost blocked out-of-fold (5 contiguous time blocks; each record is predicted by a model trained only on the OTHER blocks)
+    categorical features: ['plant_id', 'building_id', 'department_id', 'machine_id', 'machine_type', 'operating_status']
+    numeric features    : ['hour', 'day_of_week', 'is_weekend', 'is_off_shift', 'power_factor', 'production_output', 'previous_hour_kwh']
+    encoded columns     : 44
+  Deviation: residual = actual kWh - expected kWh; abs deviation = |residual|;
+    % deviation = 100*residual/expected only where expected >= 1.0 kWh (else blank);
+    excess CO2e (kg) = residual kWh x 0.82 kg/kWh.
+  Residual z-score: robust (median / 1.4826*MAD) per machine, global fallback if < 30 residuals.
+  Isolation Forest features: residual_z, residual_z_roll4, residual_z_roll12, residual_kWh (trailing windows: 4 and 12 records per machine).
+  Detection is unsupervised: no labels are used for fitting or thresholds.
+  Residual-z rows with z-flag AND Isolation-Forest flag AND residual>0 are anomalies
+  Severity (on |residual z|): low >= 2.5, medium >= 3.5, high >= 5.0.
+
+3. CONFIGURATION
+  baseline_strategy: blocked_oof
+  n_splits: 5
+  z_threshold: 2.5
+  z_medium: 3.5
+  z_high: 5.0
+  contamination: 0.02
+  combine_mode: intersection
+  direction: increase
+  window_freq: 6h
+  window_z_threshold: 2.5
+  event_gap_intervals: 4
+  emission_factor_kg_per_kwh: 0.82
+  random_state: 42
+
+4. BASELINE QUALITY (scored records only)
+  scored records: 44560   R2 = 0.8397   MAE = 11.011 kWh   RMSE = 15.386 kWh   MAE = 22.8% of mean actual
+  on rows labelled fault_flag=0: R2 = 0.8408   MAE = 10.953 kWh
+  Project gate (R2 >= 0.90, MAE < 5%): NOT MET on this dataset - baseline noise is high, which limits detection sensitivity.
+
+5. DETECTION RESULTS
+  scored records: 44560   anomalies: 443 (0.99% of all records)   not scored: 0
+  severity counts: {'medium': 240, 'low': 192, 'high': 11}
+  anomalous events (grouped): 335
+  total excess energy in flagged records: 19052.7 kWh  = 15623.2 kg CO2e
+  drill-down (largest excess CO2e at each level): plant:P01 > building:B02 > department:D03 > machine:M005 > day:2026-01-26
+  sustained-deviation windows flagged (6h): 64
+
+6. VALIDATION AGAINST THE INJECTED-FAULT LABELS (evaluation only)
+  record level : recall = 0.2988  precision = 0.1106  false-positive rate = 0.0089
+                 TP=49 FN=115 FP=394 TN=44002
+  ranking power: ROC-AUC residual z = 0.733; ROC-AUC Isolation-Forest score = 0.870
+  fault episodes detected (>=1 flagged record): 10 of 11
+    - M002 HVAC_inefficiency    2026-01-11 14:00:00 -> 2026-01-11 16:45:00  records= 12  flagged=  1  detected=True
+    - M002 HVAC_inefficiency    2026-01-12 14:00:00 -> 2026-01-12 16:45:00  records= 12  flagged=  3  detected=True
+    - M002 HVAC_inefficiency    2026-01-13 14:00:00 -> 2026-01-13 16:45:00  records= 12  flagged=  3  detected=True
+    - M003 Compressor_overload  2026-01-18 10:00:00 -> 2026-01-18 13:45:00  records= 16  flagged=  1  detected=True
+    - M003 Compressor_overload  2026-01-19 10:00:00 -> 2026-01-19 13:45:00  records= 16  flagged=  7  detected=True
+    - M003 Compressor_overload  2026-01-20 10:00:00 -> 2026-01-20 13:45:00  records= 16  flagged=  0  detected=False
+    - M004 Motor_degradation    2026-01-22 08:00:00 -> 2026-01-22 11:45:00  records= 16  flagged=  3  detected=True
+    - M004 Motor_degradation    2026-01-23 08:00:00 -> 2026-01-23 11:45:00  records= 16  flagged=  7  detected=True
+    - M004 Motor_degradation    2026-01-24 08:00:00 -> 2026-01-24 11:45:00  records= 16  flagged=  8  detected=True
+    - M005 Furnace_instability  2026-01-25 11:00:00 -> 2026-01-25 14:45:00  records= 16  flagged=  9  detected=True
+    - M005 Furnace_instability  2026-01-26 11:00:00 -> 2026-01-26 14:45:00  records= 16  flagged=  7  detected=True
+  machine localization: top-4 machines by excess CO2e = ['M005', 'M012', 'M004', 'M003']; truly faulty = ['M002', 'M003', 'M004', 'M005']; hits = 3/4
+  fault windows (6h) flagged: 11/16; window precision = 0.17 (64 windows flagged in total)
+  Project gates (recall >= 95%, FPR < 3%): recall NOT MET, FPR MET
+
+7. LIMITATIONS & HONEST CAVEATS
+  * A flag is a STATISTICAL anomaly (energy use unlike the baseline). It is not a confirmed
+    environmental incident; confirmation needs engineering review.
+  * Localization stops at the available hierarchy (plant/building/department/machine) and time.
+    Within a machine, no sub-component information exists, so none is claimed.
+  * The data contain only 4 injected fault episodes (164 records); metrics are indicative only.
+  * Injected faults raise consumption by a small amount relative to row-level noise of the
+    baseline, so per-record recall is far below the 95% project target; detection is much
+    stronger at episode / window level (see sections 5 and 6).
+  * Blocked out-of-fold baseline trains on blocks that can lie in the future of the scored block;
+    use baseline_strategy='chronological_holdout' for a strict no-lookahead check (scores only
+    the final 20% of the timeline).
+  * Isolation Forest and robust z-scale are fitted on the same period they score (unsupervised).
+  * previous_hour_kwh was verified as past-only and kept; its name suggests an hour but it is the
+    sum of the previous 4 fifteen-minute intervals.
+
+8. EXECUTION SUMMARY
+  timings (s): load_clean_s=0.28, baseline_s=9.77, detection_s=1.76, localization_s=2.40, total_s=14.34
+  warnings: Blocked OOF trains on blocks that may lie in the future of the scored block. Use baseline_strategy='chronological_holdout' for strictly no-lookahead evaluation (scores only the last part of the timeline). | Model 'final' is trained on all usable rows - use it for NEW incoming data; for the records in this run use the model named in `baseline_model_id`.
+  files: detection_results.csv, detected_incidents.csv, localization_summary.csv, drilldown_top_path.csv, evaluation_report.txt, baseline_feature_columns.json, baseline_models
